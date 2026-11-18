@@ -1,0 +1,324 @@
+
+
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from pathlib import Path
+from datetime import date, timedelta
+from PIL import Image, ImageTk, ImageSequence
+import json
+
+# Настройки
+BG = "#121212"
+CARD = "#1E1E1E"
+BLUE = "#3B82F6"
+WHITE = "#FFFFFF"
+GRAY = "#AAAAAA"
+
+DATA_FILE = Path(__file__).with_name("streak_data.json")
+
+data = {
+    "dates": [],
+    "best_streak": 0,
+    "gif_path": ""
+}
+
+gif_frames = []
+gif_durations = []
+gif_index = 0
+gif_job = None
+
+
+# Работа с данными
+def load_data():
+    global data
+
+    if DATA_FILE.exists():
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as file:
+                saved = json.load(file)
+
+            data["dates"] = saved.get("dates", [])
+            data["best_streak"] = saved.get("best_streak", 0)
+            data["gif_path"] = saved.get("gif_path", "")
+
+        except (OSError, ValueError, AttributeError):
+            messagebox.showwarning(
+                "Предупреждение",
+                "Не удалось прочитать сохранённые данные."
+            )
+
+
+def save_data():
+    try:
+        temporary = DATA_FILE.with_suffix(".tmp")
+
+        with open(temporary, "w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=4)
+
+        temporary.replace(DATA_FILE)
+
+    except OSError as error:
+        messagebox.showerror("Ошибка", str(error))
+
+
+def calculate_streak():
+    dates = sorted(set(data["dates"]), reverse=True)
+
+    if not dates:
+        return 0
+
+    today = date.today()
+    latest = date.fromisoformat(dates[0])
+
+    if latest < today - timedelta(days=1):
+        return 0
+
+    streak = 1
+    previous = latest
+
+    for item in dates[1:]:
+        current = date.fromisoformat(item)
+
+        if previous - current == timedelta(days=1):
+            streak += 1
+            previous = current
+        else:
+            break
+
+    return streak
+
+
+# Интерфейс
+root = tk.Tk()
+root.title("Daily Streak")
+root.geometry("430x700")
+root.resizable(False, False)
+root.configure(bg=BG)
+
+
+def make_label(parent, text, size, bold=False, color=WHITE):
+    return tk.Label(
+        parent,
+        text=text,
+        font=("Arial", size, "bold" if bold else "normal"),
+        bg=parent.cget("bg"),
+        fg=color
+    )
+
+
+def make_button(parent, text, command, color=BLUE):
+    return tk.Button(
+        parent,
+        text=text,
+        command=command,
+        font=("Arial", 12, "bold"),
+        bg=color,
+        fg=WHITE,
+        activebackground=color,
+        activeforeground=WHITE,
+        relief="flat",
+        cursor="hand2",
+        padx=15,
+        pady=12
+    )
+
+
+# Заголовок
+make_label(root, "DAILY STREAK", 28, True).pack(pady=(25, 5))
+make_label(root, "Твоя ежедневная серия", 12, color=GRAY).pack()
+
+# Карточка текущей серии
+streak_card = tk.Frame(root, bg=CARD, padx=20, pady=15)
+streak_card.pack(fill="x", padx=30, pady=(25, 10))
+
+make_label(streak_card, "ТЕКУЩАЯ СЕРИЯ", 11, color=GRAY).pack()
+
+streak_label = make_label(streak_card, "🔥 0", 42, True)
+streak_label.pack(pady=5)
+
+# GIF
+gif_label = tk.Label(
+    root,
+    text="Здесь будет твоя GIF",
+    bg=CARD,
+    fg=GRAY,
+    width=32,
+    height=8
+)
+gif_label.pack(pady=10)
+
+
+def show_gif_frame():
+    global gif_index, gif_job
+
+    if not gif_frames:
+        return
+
+    frame = gif_frames[gif_index]
+
+    photo = ImageTk.PhotoImage(frame)
+    gif_label.configure(image=photo, text="")
+    gif_label.image = photo
+
+    duration = gif_durations[gif_index]
+    gif_index = (gif_index + 1) % len(gif_frames)
+
+    gif_job = root.after(duration, show_gif_frame)
+
+
+def load_gif(path):
+    global gif_frames, gif_durations, gif_index, gif_job
+
+    try:
+        image = Image.open(path)
+
+        frames = []
+        durations = []
+
+        for frame in ImageSequence.Iterator(image):
+            converted = frame.convert("RGBA")
+            converted.thumbnail((260, 150))
+            frames.append(converted.copy())
+            durations.append(
+                max(50, frame.info.get("duration", 100))
+            )
+
+        if not frames:
+            raise ValueError("GIF не содержит кадров")
+
+        if gif_job:
+            root.after_cancel(gif_job)
+            gif_job = None
+
+        gif_frames = frames
+        gif_durations = durations
+        gif_index = 0
+
+        show_gif_frame()
+
+    except Exception as error:
+        messagebox.showerror("Ошибка GIF", str(error))
+
+
+def choose_gif():
+    path = filedialog.askopenfilename(
+        title="Выбери GIF",
+        filetypes=[("GIF", "*.gif")]
+    )
+
+    if path:
+        data["gif_path"] = path
+        save_data()
+        load_gif(path)
+
+
+make_button(
+    root,
+    "Добавить свою GIF",
+    choose_gif,
+    "#444444"
+).pack(pady=5)
+
+# Лучшая серия
+best_card = tk.Frame(root, bg=CARD, padx=20, pady=12)
+best_card.pack(fill="x", padx=30, pady=10)
+
+make_label(best_card, "ЛУЧШАЯ СЕРИЯ", 11, color=GRAY).pack()
+
+best_label = make_label(best_card, "🏆 0", 27, True)
+best_label.pack(pady=5)
+
+status_label = make_label(root, "", 11, color=GRAY)
+status_label.pack(pady=12)
+
+
+def update_interface():
+    streak = calculate_streak()
+
+    streak_label.configure(text=f"🔥 {streak}")
+    best_label.configure(text=f"🏆 {data['best_streak']}")
+
+    if date.today().isoformat() in data["dates"]:
+        mark_button.configure(
+            text="День уже отмечен ✓",
+            state="disabled",
+            bg="#444444"
+        )
+        status_label.configure(
+            text="Отличная работа! Возвращайся завтра."
+        )
+    else:
+        mark_button.configure(
+            text="Отметить сегодняшний день",
+            state="normal",
+            bg=BLUE
+        )
+        status_label.configure(
+            text="Сегодня ты ещё не отмечался"
+        )
+
+
+def mark_day():
+    today = date.today().isoformat()
+
+    if today in data["dates"]:
+        return
+
+    data["dates"].append(today)
+
+    streak = calculate_streak()
+    data["best_streak"] = max(data["best_streak"], streak)
+
+    save_data()
+    update_interface()
+
+
+def show_history():
+    window = tk.Toplevel(root)
+    window.title("История посещений")
+    window.geometry("320x400")
+    window.configure(bg=BG)
+
+    make_label(window, "ИСТОРИЯ", 22, True).pack(pady=20)
+
+    dates = sorted(set(data["dates"]), reverse=True)
+
+    if not dates:
+        dates = ["Пока нет отметок"]
+
+    for item in dates:
+        make_label(window, f"📅 {item}", 12).pack(pady=5)
+
+
+mark_button = make_button(
+    root,
+    "Отметить сегодняшний день",
+    mark_day
+)
+mark_button.pack(fill="x", padx=45, pady=10)
+
+make_button(
+    root,
+    "История посещений",
+    show_history,
+    "#333333"
+).pack(fill="x", padx=45, pady=5)
+
+
+def on_close():
+    if gif_job:
+        root.after_cancel(gif_job)
+
+    save_data()
+    root.destroy()
+
+
+# Запуск
+load_data()
+update_interface()
+
+if data["gif_path"] and Path(data["gif_path"]).is_file():
+    load_gif(data["gif_path"])
+
+root.protocol("WM_DELETE_WINDOW", on_close)
+root.mainloop()
